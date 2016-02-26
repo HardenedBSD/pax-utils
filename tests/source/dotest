@@ -1,0 +1,139 @@
+#!/bin/bash
+
+. "${0%/*}"/../lib.sh
+
+findfiles() {
+	find "${top_srcdir}" \
+		'(' -type d -a '(' -name .git -o -name autotools ')' -prune ')' \
+		-o '(' '(' -name '*.[ch]' -a ! -name 'config.h' ')' -print0 ')'
+}
+
+#
+# check for misc common typos
+#
+find "${top_srcdir}" \
+	'(' -type d -a '(' -name .git -o -name tests ')' -prune ')' \
+	-o '(' -type f -a -print0 ')' | xargs -0 \
+	grep -n -I \
+		-e '\<compatability\>' \
+		-e '\<compatable\>' \
+		-e '\<fordeground\>' \
+		-e '\<depency\>' \
+		-e '\<defalt\>' \
+		-e '\<remaing\>' \
+		-e '\<queuing\>' \
+		-e '\<detatch\>' \
+		-e '\<sempahore\>' \
+		-e '\<reprenstative\>' \
+		-e '\<overriden\>' \
+		-e '\<readed\>' \
+		-e '\<formated\>' \
+		-e '\<algorithic\>' \
+		-e '\<deamon\>' \
+		-e '\<derefernce\>' \
+		-e '\<lenght\>' \
+		| sed -e "s:^\.\./\.\./::g" > "${builddir}"/src.typos
+testit src.typos
+
+
+
+#
+# don't allow obsolete functions
+#
+findfiles | xargs -0 \
+	grep -n -E -e '\<(bcmp|bcopy|bzero|getwd|index|mktemp|rindex|utimes)\>[[:space:]]*\(' \
+	| sed -e "s:^\.\./\.\./::g" > "${builddir}"/src.obsolete.funcs
+testit src.obsolete.funcs
+
+
+
+#
+# make sure people use our constants
+#
+findfiles | xargs -0 \
+	grep -n -E -e '\<PATH_MAX\>' | grep -v __PAX_UTILS_PATH_MAX \
+	| sed -e "s:^\.\./\.\./::g" > "${builddir}"/src.bad.constants
+testit src.bad.constants
+
+
+
+#
+# don't allow obsolete headers
+#
+findfiles | xargs -0 \
+	grep -n -E -e '\<(malloc|memory|sys/(errno|fcntl|signal|stropts|termios|unistd))\.h\>' \
+	| sed -e "s:^\.\./\.\./::g" > "${builddir}"/src.obsolete.headers
+testit src.obsolete.headers
+
+
+
+#
+# make sure people use the x* helper funcs
+#
+xfuncs=$(printf '%s|' $(sed -n 's:.*x\([^(]*\)(.*:\1:p' "${top_srcdir}"/xfuncs.h))
+xfuncs=${xfuncs:0:${#xfuncs}-1}
+findfiles | xargs -0 \
+	grep -n -E -e "\<(${xfuncs})[[:space:]]*\(" \
+	| grep -v xfuncs.c \
+	| sed -e "s:^\.\./\.\./::g" > "${builddir}"/src.use.xfuncs
+testit src.use.xfuncs
+
+
+
+#
+# check for style
+#
+findfiles | xargs -0 \
+	grep -n -E \
+		-e '\<(for|if|switch|while)\(' \
+		-e '\<(for|if|switch|while) \( ' \
+		-e ' ;' \
+		-e '[[:space:]]$' \
+		-e '\){' \
+		-e '(^|[^:])//' \
+	| sed -e "s:^\.\./\.\./::g" > "${builddir}"/src.style
+testit src.style
+
+
+
+#
+# Auto clean up the space issues
+#
+while read -d'\0' x; do
+	case ${x} in
+	*/elf.h) continue ;; # Not our files
+	esac
+	./space "${x}" > "${builddir}/${x}~"
+	if ! diff -u "${x}" "${builddir}/${x}~" ; then
+		echo "New file: ${x}~"
+	else
+		rm -f "${builddir}/${x}~"
+	fi
+done > "${builddir}"/src.space < <(findfiles)
+testit src.space
+
+
+
+#
+# Make sure we don't keep re-importing stuff into elf.h that
+# breaks non-GNU systems. #507470
+#
+grep -E "features.h|_DECLS" "${top_srcdir}"/elf.h > "${builddir}"/src.elf.h
+testit src.elf.h
+
+
+
+#
+# Python checks
+#
+if pyflakes </dev/null 2>/dev/null; then
+	find "${top_srcdir}" \
+		'!' -ipath '*/tests/*' \
+		-name '*.py' \
+		-exec pyflakes {} + > "${builddir}"/src.pyflakes
+	testit src.pyflakes
+fi
+
+
+
+exit ${ret}
